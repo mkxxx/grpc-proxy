@@ -8,6 +8,8 @@ package proxy
 import (
 	"context"
 	"io"
+	"net"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -60,22 +62,20 @@ type handler struct {
 // handler is where the real magic of proxying happens.
 // It is invoked like any gRPC server stream and uses the gRPC server framing to get and receive bytes from the wire,
 // forwarding it to a ClientStream established against the relevant ClientConn.
-func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error {
+func (h *handler) handler(srv interface{}, serverStream grpc.ServerStream) error {
 	serverCtx := serverStream.Context()
 	ss := grpc.ServerTransportStreamFromContext(serverCtx)
 	fullMethodName := ss.Method()
-	outCtx, backendConn, err := s.director.Connect(serverCtx, fullMethodName)
+	clientCtx, clientCancel, backendConn, done, err := h.director(serverCtx, fullMethodName)
 	if err != nil {
 		return err
 	}
-	defer s.director.Release(outCtx, backendConn)
-
-	clientCtx, clientCancel := context.WithCancel(outCtx)
-	defer func() {
-		clientCancel()
-	}()
-	if _, ok := metadata.FromOutgoingContext(outCtx); !ok {
-		clientCtx = copyMetadata(clientCtx, outCtx)
+	if clientCancel == nil {
+		clientCtx, clientCancel = context.WithCancel(clientCtx)
+	}
+	defer clientCancel()
+	if _, ok := metadata.FromOutgoingContext(clientCtx); !ok {
+		clientCtx = CopyMetadata(clientCtx, serverCtx)
 	}
 	clientStream, err := grpc.NewClientStream(clientCtx, clientStreamDescForProxying, backendConn, fullMethodName)
 	if err != nil {
@@ -84,10 +84,15 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 
 	err = biDirCopy(serverStream, clientStream)
 	if err == io.EOF {
-		return nil
+		err = nil
+	}
+	if done != nil {
+		done(err)
 	}
 	return err
 }
+
+const XForwardedFor = "X-Forwarded-For"
 
 // copyMetadata takes the new client (outgoing) context, a server (incoming)
 // context, and returns a new outgoing context which contains all the incoming
@@ -95,16 +100,34 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 //
 // An additional X-Forwarded-For metadata entry is added or appended to with
 // the peer address from the server context. See https://en.wikipedia.org/wiki/X-Forwarded-For.
-func copyMetadata(ctx context.Context, serverCtx context.Context) context.Context {
-	source := "unknown"
-	if peer, ok := peer.FromContext(serverCtx); ok && peer.Addr != nil {
-		source = peer.Addr.String()
+func CopyMetadata(ctx context.Context, serverCtx context.Context) context.Context {
+	remoteIp := RemoteIp(serverCtx)
+	if md, ok := metadata.FromIncomingContext(serverCtx); ok {
+		md := md.Copy()
+		if len(remoteIp) != 0 {
+			md.Append(XForwardedFor, remoteIp)
+		}
+		return metadata.NewOutgoingContext(ctx, md)
 	}
-	forwardMD := metadata.Pairs("X-Forwarded-For", source)
+	if len(remoteIp) == 0 {
+		return ctx
+	}
+	return metadata.NewOutgoingContext(ctx, metadata.Pairs(XForwardedFor, remoteIp))
+}
 
-	md, ok := metadata.FromIncomingContext(serverCtx)
-	if ok {
-		return metadata.NewOutgoingContext(ctx, metadata.Join(md, forwardMD))
+func RemoteIp(ctx context.Context) string {
+	pr, ok := peer.FromContext(ctx)
+	if !ok {
+		return ""
 	}
-	return metadata.NewOutgoingContext(ctx, forwardMD)
+	addr := pr.Addr
+	if addr, ok := addr.(*net.TCPAddr); ok {
+		return addr.IP.String()
+	}
+	s := addr.String()
+	i := strings.LastIndex(s, ":")
+	if i < 0 {
+		return s
+	}
+	return s[:i]
 }

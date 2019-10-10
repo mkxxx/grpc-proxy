@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mkxxx/grpc-proxy/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/vgough/grpc-proxy/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/grpclog"
@@ -24,7 +24,7 @@ import (
 
 	"fmt"
 
-	pb "github.com/vgough/grpc-proxy/testservice"
+	pb "github.com/mkxxx/grpc-proxy/testservice"
 )
 
 const (
@@ -194,17 +194,16 @@ type checkingDirector struct {
 	conn *grpc.ClientConn
 }
 
-func (c *checkingDirector) Connect(ctx context.Context, method string) (context.Context, *grpc.ClientConn, error) {
+func (c *checkingDirector) ClientConn(ctx context.Context, method string) (context.Context, context.CancelFunc,
+	*grpc.ClientConn, proxy.DoneCallback, error) {
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if ok {
 		if _, exists := md[rejectingMdKey]; exists {
-			return ctx, nil, grpc.Errorf(codes.PermissionDenied, "testing rejection")
+			return ctx, nil, nil, nil, grpc.Errorf(codes.PermissionDenied, "testing rejection")
 		}
 	}
-	return ctx, c.conn, nil
-}
-
-func (c *checkingDirector) Release(ctx context.Context, conn *grpc.ClientConn) {
+	return ctx, nil, c.conn, nil, nil
 }
 
 func (s *ProxyHappySuite) SetupSuite() {
@@ -226,10 +225,10 @@ func (s *ProxyHappySuite) SetupSuite() {
 	director := &checkingDirector{conn: s.serverClientConn}
 	s.proxy = grpc.NewServer(
 		grpc.CustomCodec(proxy.Codec()),
-		grpc.UnknownServiceHandler(proxy.TransparentHandler(director)),
+		grpc.UnknownServiceHandler(proxy.TransparentHandler(director.ClientConn)),
 	)
 	// Ping handler is handled as an explicit registration and not as a TransparentHandler.
-	proxy.RegisterService(s.proxy, director,
+	proxy.RegisterService(s.proxy, director.ClientConn,
 		"vgough.testproto.TestService",
 		"Ping")
 

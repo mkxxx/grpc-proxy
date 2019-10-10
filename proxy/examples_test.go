@@ -9,7 +9,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/vgough/grpc-proxy/proxy"
+	"github.com/mkxxx/grpc-proxy/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -39,28 +39,23 @@ func ExampleTransparentHandler() {
 type ExampleDirector struct {
 }
 
-func (d *ExampleDirector) Connect(ctx context.Context, method string) (context.Context, *grpc.ClientConn, error) {
+func ClientConn(ctx context.Context, method string) (context.Context, context.CancelFunc, *grpc.ClientConn, error) {
 	// Make sure we never forward internal services.
 	if strings.HasPrefix(method, "/com.example.internal.") {
-		return nil, nil, grpc.Errorf(codes.Unimplemented, "Unknown method")
+		return nil, nil, nil, grpc.Errorf(codes.Unimplemented, "Unknown method")
 	}
-	md, ok := metadata.FromIncomingContext(ctx)
-	if ok {
+	var addr string
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		// Decide on which backend to dial
 		if val, exists := md[":authority"]; exists && val[0] == "staging.api.example.com" {
-			// Make sure we use DialContext so the dialing can be cancelled/time out together with the context.
-			conn, err := grpc.DialContext(ctx, "api-service.staging.svc.local", grpc.WithCodec(proxy.Codec()))
-			return ctx, conn, err
+			addr = "api-service.staging.svc.local"
 		} else if val, exists := md[":authority"]; exists && val[0] == "api.example.com" {
-			conn, err := grpc.DialContext(ctx, "api-service.prod.svc.local", grpc.WithCodec(proxy.Codec()))
-			return ctx, conn, err
+			addr = "api-service.prod.svc.local"
 		}
 	}
-	return nil, nil, grpc.Errorf(codes.Unimplemented, "Unknown method")
+	if len(addr) == 0 {
+		return nil, nil, nil, grpc.Errorf(codes.Unimplemented, "Unknown method")
+	}
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithCodec(proxy.Codec()))
+	return context.Background(), nil, conn, err
 }
-
-func (d *ExampleDirector) Release(ctx context.Context, conn *grpc.ClientConn) {
-	conn.Close()
-}
-
-var _ proxy.StreamDirector = &ExampleDirector{}

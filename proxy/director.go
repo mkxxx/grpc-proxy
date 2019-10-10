@@ -7,7 +7,6 @@ package proxy
 
 import (
 	"context"
-
 	"google.golang.org/grpc"
 )
 
@@ -20,6 +19,7 @@ import (
 // Connect will be called *after* all server-side stream interceptors are
 // invoked. So decisions around authorization, monitoring etc. are better to be
 // handled there.
+/*
 type StreamDirector interface {
 	// Connect returns a connection to use for the given method,
 	// or an error if the call should not be handled.
@@ -41,3 +41,7 @@ type StreamDirector interface {
 	// connections.
 	Release(ctx context.Context, conn *grpc.ClientConn)
 }
+*/
+// "Best practices for reusing connections, concurrency" - https://github.com/grpc/grpc-go/issues/682
+type StreamDirector func(ctx context.Context, method string) (context.Context, context.CancelFunc, *grpc.ClientConn, DoneCallback, error)
+type DoneCallback func(error)
