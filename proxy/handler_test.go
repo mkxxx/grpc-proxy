@@ -194,16 +194,17 @@ type checkingDirector struct {
 	conn *grpc.ClientConn
 }
 
-func (c *checkingDirector) ClientConn(ctx context.Context, method string) (context.Context, context.CancelFunc,
-	*grpc.ClientConn, proxy.DoneCallback, error) {
+func (c *checkingDirector) ClientConn(ctx context.Context, method string) (context.Context, context.CancelFunc, proxy.Direction, error) {
 
+	var ret proxy.Direction
 	md, ok := metadata.FromIncomingContext(ctx)
 	if ok {
 		if _, exists := md[rejectingMdKey]; exists {
-			return ctx, nil, nil, nil, grpc.Errorf(codes.PermissionDenied, "testing rejection")
+			return ctx, nil, ret, grpc.Errorf(codes.PermissionDenied, "testing rejection")
 		}
 	}
-	return ctx, nil, c.conn, nil, nil
+	ret.BackendConn = c.conn
+	return ctx, nil, ret, nil
 }
 
 func (s *ProxyHappySuite) SetupSuite() {

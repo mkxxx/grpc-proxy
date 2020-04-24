@@ -66,7 +66,7 @@ func (h *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	serverCtx := serverStream.Context()
 	ss := grpc.ServerTransportStreamFromContext(serverCtx)
 	fullMethodName := ss.Method()
-	clientCtx, clientCancel, backendConn, done, err := h.director(serverCtx, fullMethodName)
+	clientCtx, clientCancel, dir, err := h.director(serverCtx, fullMethodName)
 	if err != nil {
 		return err
 	}
@@ -77,7 +77,10 @@ func (h *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	if _, ok := metadata.FromOutgoingContext(clientCtx); !ok {
 		clientCtx = CopyMetadata(clientCtx, serverCtx)
 	}
-	clientStream, err := grpc.NewClientStream(clientCtx, clientStreamDescForProxying, backendConn, fullMethodName)
+	if len(dir.Method) != 0 {
+		fullMethodName = dir.Method
+	}
+	clientStream, err := grpc.NewClientStream(clientCtx, clientStreamDescForProxying, dir.BackendConn, fullMethodName)
 	if err != nil {
 		return err
 	}
@@ -86,8 +89,8 @@ func (h *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	if err == io.EOF {
 		err = nil
 	}
-	if done != nil {
-		done(err)
+	if dir.Done != nil {
+		dir.Done(err)
 	}
 	return err
 }

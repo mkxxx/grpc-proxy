@@ -43,5 +43,10 @@ type StreamDirector interface {
 }
 */
 // "Best practices for reusing connections, concurrency" - https://github.com/grpc/grpc-go/issues/682
-type StreamDirector func(ctx context.Context, method string) (context.Context, context.CancelFunc, *grpc.ClientConn, DoneCallback, error)
-type DoneCallback func(error)
+type StreamDirector func(ctx context.Context, method string) (context.Context, context.CancelFunc, Direction, error)
+
+type Direction struct {
+	BackendConn *grpc.ClientConn
+	Method      string
+	Done        func(error)
+}
